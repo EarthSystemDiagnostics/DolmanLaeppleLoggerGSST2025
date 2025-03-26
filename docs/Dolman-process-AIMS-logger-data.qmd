@@ -1,0 +1,765 @@
+---
+title: "Load and process AIMS logger data"
+format: html
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+
+This code section downloads the AIMS logger data using dataaimsr package. Data are only downloaded if the cached data are not present. To do this you will need to obtain an API Key. See here: https://github.com/ropensci/dataaimsr
+
+
+```{r setup, eval=FALSE}
+remotes::install_github("ropensci/dataaimsr")
+```
+
+assumes that user already has API key saved to .Renviron
+
+```{r, eval=FALSE}
+usethis::edit_r_environ()
+```
+
+## Required packages
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(dataaimsr)
+library(tidync)
+library(zoo)
+```
+
+
+## Load metadata tables
+
+```{r}
+if (file.exists("../data/raw-data/aims_logger_meta_api.rds") == FALSE){
+
+  aims_logger_meta_api <- aims_data("temp_loggers", api_key = NULL,
+                           summary = "summary-by-series") %>%
+  as_tibble()
+  
+  saveRDS(aims_logger_meta_api, file = "../data/raw-data/aims_logger_meta_api.rds")
+  
+} else {
+  aims_logger_meta_api <- readRDS("../data/raw-data/aims_logger_meta_api.rds")
+  }
+
+if (file.exists("../data/raw-data/aims_logger_meta_depl_api.rds") == FALSE){
+
+  aims_logger_meta_depl_api <- aims_data("temp_loggers", api_key = NULL,
+                           summary = "summary-by-deployment") %>%
+  as_tibble()
+  
+  saveRDS(aims_logger_meta_depl_api, 
+          file = "../data/raw-data/aims_logger_meta_depl_api.rds")
+  
+} else {
+  aims_logger_meta_depl_api <- readRDS("../data/raw-data/aims_logger_meta_depl_api.rds")
+}
+```
+
+
+```{r}
+aims_meta_api_sub <- aims_logger_meta_api %>% 
+  tibble() %>% 
+  mutate(date_coverage_start = as.Date(time_coverage_start),
+         date_coverage_end = as.Date(time_coverage_end)) %>% 
+  mutate(max_time_length = round(as.numeric(date_coverage_end - date_coverage_start)/365, 1)) 
+```
+
+
+
+## Sites, subsites, and series
+
+Check structure of data 
+
+```{r}
+aims_meta_api_sub %>% 
+  group_by(series) %>% 
+  mutate(n = n()) %>% 
+  arrange(desc(n)) %>% 
+  filter(n > 1) 
+
+aims_logger_meta_api %>% 
+  group_by(site, subsite) %>% 
+  summarise(n_series = n_distinct(series)) %>% 
+  arrange(desc(n_series))
+
+aims_logger_meta_api %>% 
+  group_by(site, series) %>% 
+  summarise(n_subsites = n_distinct(subsite)) %>% 
+  arrange(desc(n_subsites))
+```
+
+
+
+Check distances between subsites at sites
+
+```{r}
+subsite_dist <- aims_logger_meta_api %>% 
+  ungroup() %>% 
+  select(site, subsite, lat, lon) %>% 
+  group_by(site) %>% 
+  do({
+    
+    dat <- .
+    
+    dat %>%
+      group_by(site, subsite) %>%
+      reframe(dist_km = geosphere::distGeo(cbind(dat$lon, dat$lat), cbind(lon, lat)) / 1000,
+               subsite2 = .$subsite)
+    
+  }) %>% 
+  filter(subsite != subsite2) %>% 
+  distinct()
+
+max_subsite_dist <- subsite_dist %>% 
+  group_by(site) %>% 
+  arrange(site, desc(dist_km)) %>% 
+  summarise(max_subsite_dist = max(dist_km, na.rm = TRUE),
+            subsite_dists = paste(signif(dist_km, 2), collapse = ", "),
+            n = n()) %>% 
+  arrange(desc(max_subsite_dist))
+```
+
+# Download AIMS logger data at daily resolution ----------
+
+```{r}
+if (file.exists("../data/raw-data/all_aims_logger_data.RDS") == FALSE){
+
+  all_aims_logger_data <- aims_data("temp_loggers", api_key = NULL,
+                             summary = "daily") %>%
+      as_tibble()
+
+saveRDS(all_aims_logger_data,
+         file = "../data/raw-data/all_aims_logger_data.RDS")
+} else {
+  all_aims_logger_data <- readRDS("../data/raw-data/all_aims_logger_data.RDS")
+}
+```
+
+```{r}
+## remove data with missing lat or lon 
+## Only applies to one subsite at Scott Reef 
+aims_logger_data <- left_join(aims_logger_meta_depl_api, all_aims_logger_data) %>% 
+  filter(complete.cases(qc_val, lat, lon))
+```
+
+## Insert missing time periods in ts by creating dataframe with all days and then joining
+
+```{r}
+all_year_mnths_subsite <- aims_logger_data %>% 
+  filter(complete.cases(time)) %>% 
+  ungroup() %>% 
+  group_by(site, site_id, subsite, subsite_id) %>% 
+  do({
+    
+    dat <- .
+    
+    strt <- min(dat$time)
+    nd <- max(dat$time)
+    
+    tibble(time = seq(strt, nd,
+                          by = "1 day"), 
+           year = year(time),
+           month = month(time),
+           day = day(time)
+           )
+    })
+
+
+aims_logger_data_inc_gaps <- left_join(all_year_mnths_subsite, aims_logger_data) %>% 
+  mutate(date = as.Date(time)) 
+```
+
+
+## Keep only sites with at least 10 years of data
+
+```{r}
+aims_logger_data_inc_gaps_min10 <- aims_logger_data_inc_gaps %>% 
+  group_by(site) %>% 
+  mutate(year.dec = lubridate::decimal_date(time)) %>% 
+  filter(diff(range(year.dec)) >= 10) %>% 
+  filter(n_distinct(year.dec) >= 10)
+```
+
+Diagnostic figure
+
+```{r}
+aims_logger_data_inc_gaps_min10 %>% 
+  ggplot(aes(x = time, y = qc_val, colour = -depth, group = deployment_id)) +
+  geom_line() +
+  scale_colour_viridis_c(na.value = "red") +
+  facet_wrap(~site, scales = "fixed")
+```
+
+
+## Aggregate to site, average across subsites
+
+```{r}
+aims_logger_data_inc_gaps_site <- aims_logger_data_inc_gaps %>% 
+  # exclude subsite with bad data
+  filter(subsite != "DAVFL1") %>% 
+  ungroup() %>% 
+  select(site, site_id, subsite, lon, lat, deployment_id, serial_num,
+         time, year, month, day, depth, qc_val, cal_val) %>% 
+  mutate(deployment_id = as.character(deployment_id),
+         serial_num = as.character(serial_num),
+         depth_char = as.character(depth)) %>% 
+  #slice(1:1000) %>% 
+  group_by(site, site_id, time, year, month, day) %>% 
+  summarise(
+    subsite_composite = paste(subsite, collapse = ", "),
+    deployment_id = paste(deployment_id, collapse = ", "),
+    serial_num = paste(serial_num, collapse = ", "),
+    depth_char = paste(depth_char, collapse = ", "),
+    depth = mean(depth, na.rm = TRUE),
+    qc_val = mean(qc_val, na.rm = TRUE),
+    lat = mean(lat, na.rm = TRUE),
+    lon = mean(lon, na.rm = TRUE)
+  ) 
+
+#beepr::beep()
+```
+
+
+```{r}
+## check only one data point per site per day
+n_per_site_day <- aims_logger_data_inc_gaps_site %>% 
+  group_by(site, year, month, day) %>% 
+  summarise(n = n()) %>% 
+  arrange(desc(n)) %>% 
+  pull(n) 
+
+stopifnot(max(n_per_site_day) == 1)
+```
+
+## Re-add gaps now on site basis
+
+```{r}
+all_year_mnths_site <- aims_logger_data_inc_gaps_site %>% 
+  ungroup() %>% 
+  filter(complete.cases(time)) %>% 
+  select(site, site_id, time, qc_val) %>% 
+  ungroup() %>% 
+  #slice(1:20) %>% 
+  group_by(site, site_id) %>% 
+  do({
+    
+    dat <- .
+    
+    strt <- min(dat$time)
+    nd <- max(dat$time)
+  
+    tibble(time = seq(strt, nd,
+                          by = "1 day"), 
+           year = year(time),
+           month = month(time),
+           day = day(time)
+           )
+    })
+
+
+aims_logger_data_inc_gaps_site <- left_join(all_year_mnths_site, aims_logger_data_inc_gaps_site) %>% 
+  mutate(date = as.Date(time)) 
+```
+
+
+## Identify runs and gaps and gap lengths
+
+```{r}
+x = c(1,2,4,NA,NA,6,NA,19,NA,NA)
+
+GapLength <- function(x){
+  res = rle(is.na(x))
+  rep(res$values * res$lengths, res$lengths)
+}
+
+GapID <- function(x){
+  y <- data.table::rleid(is.na(x)) * as.numeric(is.na(x))
+  y[y == 0] <- NA
+  y <- as.numeric(factor(y)) 
+ 
+ y
+}
+
+GapID(x)
+GapLength(x)
+
+RunLength <- function(x){
+  res = rle(is.na(x)==FALSE)
+  rep(res$values * res$lengths, res$lengths)
+}
+
+RunID <- function(x){
+ y <- data.table::rleid(is.na(x)==FALSE) * as.numeric(is.na(x) == FALSE)
+ y[y == 0] <- NA
+ y <- as.numeric(factor(y)) 
+ y
+}
+```
+
+
+```{r}
+aims_logger_data_inc_gaps_site_runs <- aims_logger_data_inc_gaps_site %>%  
+  group_by(site, site_id) %>% 
+  arrange(site, site_id, time) %>% 
+  mutate(n = sum(is.na(qc_val)==FALSE),
+         n_NA = sum(is.na(qc_val)),
+         p_NA = n_NA / (n + n_NA)
+         ) %>% 
+  mutate(gap_length = GapLength(qc_val), 
+         gap_id = GapID(qc_val),
+         run_length = RunLength(qc_val), 
+         run_id = RunID(qc_val)) %>% 
+  mutate(site_run = paste0(site, "_", run_id))%>% 
+  group_by(site, site_id) %>% 
+  mutate(max_length_site = max(time) - min(time),
+         n_distinct_years_site = n_distinct(year)) %>% 
+  ungroup()
+```
+
+
+```{r}
+gap_lengths <- aims_logger_data_inc_gaps_site_runs %>% 
+  filter(complete.cases(gap_id)) %>% 
+  group_by(site, gap_id) %>% 
+  summarise(gap_length = unique(gap_length))
+
+hist(gap_lengths$gap_length[gap_lengths$gap_length < 365], 100)
+
+table(gap_lengths$gap_length <= 7)
+```
+
+
+## Interpolate across short gaps
+
+Most gaps less than 1 week, interpolate up to max 7 days
+
+```{r}
+aims_logger_data_inc_gaps_site_gfill <- aims_logger_data_inc_gaps_site %>% 
+  group_by(site) %>% 
+  arrange(site, time) %>% 
+  mutate(qc_val_filled = zoo::na.approx(
+    qc_val, x = time, xout = time, maxgap = 7)
+    )
+```
+
+## Re-calc gaps
+
+```{r}
+aims_logger_data_inc_gaps_site_gfill_runs <- aims_logger_data_inc_gaps_site_gfill %>%  
+  group_by(site, site_id) %>% 
+  arrange(site, site_id, time) %>% 
+  mutate(n = sum(is.na(qc_val_filled)==FALSE),
+         n_NA = sum(is.na(qc_val_filled)),
+         p_NA = n_NA / (n + n_NA)
+         ) %>% 
+  mutate(gap_length = GapLength(qc_val_filled), 
+         gap_id = GapID(qc_val_filled),
+         run_length = RunLength(qc_val_filled), 
+         run_id = RunID(qc_val_filled)) %>% 
+  #filter(complete.cases(run_id)) %>% 
+  mutate(site_run = paste0(site, "_", run_id))%>% 
+  group_by(site, site_id) %>% 
+  mutate(max_length_site = max(time) - min(time),
+         n_distinct_years_site = n_distinct(year)) %>% 
+  mutate(filled_vals = ifelse(is.na(qc_val), qc_val_filled, NA)) %>% 
+  ungroup() %>% 
+  left_join(., select(max_subsite_dist, site, max_subsite_dist))
+```
+
+
+```{r}
+gap_lengths <- aims_logger_data_inc_gaps_site_gfill_runs %>% 
+  filter(complete.cases(gap_id)) %>% 
+  group_by(site, gap_id) %>% 
+  summarise(gap_length = unique(gap_length))
+
+hist(gap_lengths$gap_length[gap_lengths$gap_length < 365], 100)
+```
+
+
+
+### Keep site-runs with at least 10 years
+
+```{r}
+aims_logger_data_gfill_siteruns_10 <- aims_logger_data_inc_gaps_site_gfill_runs %>% 
+  group_by(site, site_id, site_run) %>% 
+  filter(complete.cases(run_id)) %>% 
+  #mutate(year.dec = lubridate::decimal_date(time)) %>% 
+  filter(diff(range(year)) >= 10,
+         length(unique(year)) >= 10)
+```
+
+
+### Maximum distance between subsites in remaining data
+
+```{r}
+max_used_subsite_dist <- aims_logger_data_gfill_siteruns_10 %>% 
+  select(site, max_subsite_dist) %>% 
+  distinct() %>% 
+  arrange(desc(max_subsite_dist))
+
+max_used_subsite_dist
+
+sites_10_yr <- aims_logger_data_gfill_siteruns_10 %>% 
+  ungroup() %>% 
+  select(site) %>% 
+  distinct() %>% 
+  left_join(., aims_logger_meta_api) %>% 
+  select(site, subsite, lon, lat) %>% 
+  distinct() %>% 
+  group_by(site) %>% 
+  summarise_if(is.numeric, mean, na.rm = TRUE)
+```
+
+### Plots of gap filled data
+
+```{r}
+aims_logger_data_gfill_siteruns_10 %>% 
+  group_by(site, site_id, site_run) %>% 
+  filter(complete.cases(run_id)) %>% 
+  filter(diff(range(year)) >= 10) %>% 
+  ggplot(aes(x = time, y = qc_val,
+                              colour = -depth,
+                              group = site_run
+                              )) +
+  geom_line() +
+  #geom_point() +
+  geom_point(aes(y = filled_vals), colour = "red") +
+      scale_colour_viridis_c(na.value = "pink") +
+      facet_wrap(~site_run+signif(max_subsite_dist, 2), scales = "fixed")
+```
+
+
+
+## Redo picking one subsite at a time (method b in paper)
+
+
+- pick subsite closest to the median location and median depth
+
+### Get median location and depths
+
+```{r}
+site_run_medians <- aims_logger_data_gfill_siteruns_10 %>% 
+  ungroup() %>% 
+  select(site, site_run, date, lat, lon, depth) %>% 
+  group_by(site, site_run) %>% 
+  mutate_if(is.numeric, .funs = c(median = "median"), na.rm = TRUE) %>% 
+  select(-site_run, -lon, -lat, -depth)
+```
+
+```{r}
+aims_logger_data_site_pick <- aims_logger_data_inc_gaps %>%
+  filter(site %in% site_run_medians$site) %>% 
+  filter(subsite != "DAVFL1") %>% 
+  ungroup() %>% 
+  left_join(., site_run_medians, by = c("site", "date")) %>% 
+  select(site, site_id, subsite, lon, lat, deployment_id, serial_num,
+         time, year, month, day, depth, qc_val, cal_val, ends_with("_median")) %>% 
+  mutate(deployment_id = as.character(deployment_id),
+         serial_num = as.character(serial_num),
+         depth_char = as.character(depth)) %>% 
+  mutate(
+    subsite_dist = geosphere::distGeo(cbind(lon, lat), cbind(lon_median, lat_median)),
+    subsite_dDepth = abs(depth - depth_median)) %>% 
+  # if it's the only subsite left it gets picked even if it had no depth data
+  mutate(subsite_dDepth = ifelse(is.na(subsite_dDepth), 100, subsite_dDepth)) %>% 
+  group_by(site, site_id, year, month, day) %>% 
+  mutate(min_subsite_dist = min(subsite_dist, na.rm = TRUE),
+         min_dist = (subsite_dist == min_subsite_dist)) %>% 
+  filter(min_dist) %>% 
+  mutate(min_subsite_depth = min(subsite_dDepth, na.rm = TRUE), 
+         min_dDepth = (subsite_dDepth == min_subsite_depth)) %>% 
+  filter(min_dDepth) %>% 
+  ## some subsites with same depth but multiple deployments - in this case average across
+  group_by(site, time) %>% 
+  summarise_if(is.numeric, mean, na.rm = TRUE)
+  
+#beepr::beep()  
+```
+
+
+### Re-add gaps again on site basis
+
+```{r}
+all_year_mnths_site <- aims_logger_data_site_pick %>% 
+  ungroup() %>% 
+  filter(complete.cases(time)) %>% 
+  select(site, site_id, time, qc_val) %>% 
+  ungroup() %>% 
+  #slice(1:20) %>% 
+  group_by(site, site_id) %>% 
+  do({
+    
+    dat <- .
+    
+    strt <- min(dat$time)
+    nd <- max(dat$time)
+   
+    tibble(time = seq(strt, nd,
+                          by = "1 day"), 
+           year = year(time),
+           month = month(time),
+           day = day(time)
+           )
+    })
+
+aims_logger_data_inc_gaps_site_pick <- left_join(all_year_mnths_site, aims_logger_data_site_pick) %>% 
+  mutate(date = as.Date(time)) 
+```
+
+
+### Interpolate over gaps up to 7 days
+
+```{r}
+aims_logger_data_inc_gaps_site_pick_gfill <- aims_logger_data_inc_gaps_site_pick %>% 
+  group_by(site) %>% 
+  arrange(site, time) %>% 
+  mutate(qc_val_filled = zoo::na.approx(
+    qc_val, x = time, xout = time, maxgap = 7)
+    )
+```
+
+
+### Label runs 
+
+```{r}
+aims_logger_data_inc_gaps_site_pick_gfill_runs <- aims_logger_data_inc_gaps_site_pick_gfill %>%  
+  group_by(site, site_id) %>% 
+  arrange(site, site_id, time) %>% 
+  mutate(n = sum(is.na(qc_val_filled)==FALSE),
+         n_NA = sum(is.na(qc_val_filled)),
+         p_NA = n_NA / (n + n_NA)
+         ) %>% 
+  mutate(gap_length = GapLength(qc_val_filled), 
+         gap_id = GapID(qc_val_filled),
+         run_length = RunLength(qc_val_filled), 
+         run_id = RunID(qc_val_filled)) %>% 
+  #filter(complete.cases(run_id)) %>% 
+  mutate(site_run = paste0(site, "_", run_id))%>% 
+  group_by(site, site_id) %>% 
+  mutate(max_length_site = max(time) - min(time),
+         n_distinct_years_site = n_distinct(year)) %>% 
+  mutate(filled_vals = ifelse(is.na(qc_val), qc_val_filled, NA)) %>% 
+  ungroup() %>% 
+  filter(complete.cases(run_id))
+```
+
+```{r}
+aims_logger_data_inc_gaps_site_pick_gfill_runs %>% 
+  ggplot(aes(x = time, y = qc_val_filled, colour = factor(depth), group = site)) +
+  geom_line() +
+  geom_point(aes(y = qc_val_filled * ifelse(is.na(qc_val), 1, NA)), colour = "red") +
+  facet_wrap(~site_run)
+```
+
+
+
+# Add OISST at daily resolution
+
+### Get OISST at daily resolution for sites with 10 year runs
+
+
+Helper CDO function
+
+```{r}
+extract_data_with_cdo_dis <- function(
+    nc_file, lat, lon, data_var) {
+
+  tfile <- tempfile()
+
+  # Construct the CDO command
+  cdo_command <- sprintf(
+    "cdo remapdis,lon=%f/lat=%f -selname,%s %s %s",
+    lon, lat, data_var, nc_file, tfile)
+
+  # Execute the CDO command
+  system(cdo_command)
+
+  # Read the output file
+  result <- tidync::hyper_tibble(tfile)
+
+  # Clean up: delete the temporary output file
+  file.remove(tfile)
+
+  # Return the result
+  return(result)
+}
+```
+
+
+
+This code is time consuming and only runs if the cached processed file is not found. 
+
+```{r}
+if (file.exists("../data/processed-data/AIMS_logger_daily_OISST2.RDS") == FALSE){
+
+  fl_daily <- "../data/raw-data/sst.day.mean.trop.1981.2025.nc"
+
+
+AIMS_logger_daily_OISST2_a <- sites_10_yr %>% 
+  #slice(1) %>% 
+  filter(complete.cases(lat, lon)) %>% 
+  group_by(site, lon, lat) %>% 
+  do({
+    a <- extract_data_with_cdo_dis(
+      fl_daily,
+      lat = .$lat, lon = lon180To360(.$lon),
+      "sst"
+    ) %>% 
+      mutate(interp_type = "SST_OISST2_dis")
+    
+    a
+    
+  })
+
+OISST_daily_time <- tidync(fl_daily) %>% activate("time") %>% hyper_tibble() %>% pull(time)
+
+AIMS_logger_daily_OISST2 <- AIMS_logger_daily_OISST2_a %>% 
+  group_by(site) %>% 
+  mutate(date = OISST_daily_time,
+         year = lubridate::year(date),
+         month = lubridate::month(date)) %>% 
+  select(site, lon, lat, date, year, month, everything()) 
+
+AIMS_logger_daily_OISST2 %>%
+  mutate(date = lubridate::as_date(date),
+         doy = lubridate::yday(date)) %>% 
+  saveRDS(., file = "../data/processed-data/AIMS_logger_daily_OISST2.RDS")
+
+} else {
+  AIMS_logger_daily_OISST2 <- readRDS("../data/processed-data/AIMS_logger_daily_OISST2.RDS")  
+}
+```
+
+## Join daily OISST to daily site means for sites with 10 years
+
+```{r save daily}
+aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst <- 
+  left_join(ungroup(aims_logger_data_gfill_siteruns_10),
+            select(ungroup(AIMS_logger_daily_OISST2),
+                   #-year, -month,
+                   -lat, -lon)) %>% 
+  group_by(site, site_id) %>% 
+  mutate(lat = mean(lat, na.rm = TRUE),
+         lon = mean(lon, na.rm = TRUE)) %>% 
+  ungroup()
+```
+
+
+```{r save daily}
+saveRDS(aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst,
+        "../data/processed-data/aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst.RDS")
+```
+
+
+## Join daily OISST to daily logger data for picked sub-sites with 10 years
+
+```{r save daily single site picked}
+aims_logger_data_inc_gaps_site_pick_gfill_daily_runs_oisst <- 
+  left_join(ungroup(aims_logger_data_inc_gaps_site_pick_gfill_runs),
+            select(ungroup(AIMS_logger_daily_OISST2),
+                   #-year, -month,
+                   -lat, -lon)) %>% 
+  group_by(site, site_id) %>% 
+  mutate(lat = mean(lat, na.rm = TRUE),
+         lon = mean(lon, na.rm = TRUE)) %>% 
+  ungroup()
+
+saveRDS(aims_logger_data_inc_gaps_site_pick_gfill_daily_runs_oisst,
+        "../data/processed-data/aims_logger_data_inc_gaps_site_pick_gfill_daily_runs_oisst.RDS")
+
+#beepr::beep()
+```
+
+
+## Look at deployment issues at daily res subsite level
+
+
+### Join OISST to subsite logger data
+```{r}
+aims_logger_data_inc_gaps_oisst_daily <- left_join(ungroup(aims_logger_data_inc_gaps),
+                                             select(ungroup(AIMS_logger_daily_OISST2),
+                                                    -year, -month, -lat, -lon))
+```
+
+
+### Example logger deployment issues
+
+#### Kelso Reef
+
+Logger temperature - OISST value
+
+```{r}
+aims_logger_data_inc_gaps_oisst_daily %>% 
+  filter(site == "Kelso Reef", 
+         #subsite == "KELSL1",
+         year >= 2000,
+         year <= 2010
+    ) %>%  
+  filter(complete.cases(qc_val)) %>% 
+  group_by(site, subsite) %>% 
+  mutate(deployment_idx_subsite = as.character(as.numeric(factor(paste(time_coverage_start, deployment_id, depth,
+                                                                       serial_num))))) %>% 
+  arrange(subsite, time) %>% 
+  ggplot(aes(x = time, y = qc_val-sst, colour = deployment_idx_subsite,
+             #linetype = subsite,
+             group = factor(deployment_id))) +
+  geom_line() +
+  geom_hline(yintercept = 0) +
+ ggridges::scale_colour_cyclical(values = RColorBrewer::brewer.pal(5, name = "Set2")) +
+  facet_grid(subsite~site, scales = "fixed", labeller = label_both)
+```
+
+Raw logger temperatures
+
+```{r}
+aims_logger_data_inc_gaps_oisst_daily %>% 
+  filter(site == "Kelso Reef", 
+         year >= 2000,
+         year <= 2007
+    ) %>%  
+  filter(complete.cases(qc_val)) %>% 
+  #View() %>% 
+  group_by(site, subsite) %>% 
+  mutate(deployment_idx_subsite = as.character(as.numeric(factor(time_coverage_start)))) %>% 
+  arrange(subsite, time) %>% 
+  ggplot(aes(x = time, y = qc_val, colour = deployment_idx_subsite,
+             #linetype = subsite,
+             group = factor(deployment_id))) +
+  geom_line() +
+ ggridges::scale_colour_cyclical(values = RColorBrewer::brewer.pal(5, name = "Set2")) +
+  facet_grid(depth+subsite~site, scales = "fixed", labeller = label_both)
+```
+
+
+
+```{r}
+aims_logger_data_inc_gaps_oisst_daily %>% 
+  filter(site == "Dip Reef", 
+         subsite %in% c("DIPSL1", "DIPFL1"),
+         #year >= 2004,
+         #year <= 2007
+    ) %>%  
+  filter(complete.cases(qc_val)) %>% 
+  left_join(., select(AIMS_logger_daily_OISST2, -lat, -lon)) %>%# View()
+  ungroup() %>% 
+  mutate(deployment_idx_subsite = as.character(as.numeric(factor(paste(subsite, deployment_id))))) %>% 
+  arrange(subsite, deployment_id, time) %>% 
+  ggplot(aes(x = time, y = qc_val-sst, 
+             name = deployment_id,
+             group = factor(deployment_id),
+             colour = deployment_idx_subsite)) +
+  geom_line() +
+  geom_hline(yintercept = 0) +
+  ggridges::scale_colour_cyclical(values = RColorBrewer::brewer.pal(5, name = "Set2")) +
+  facet_grid(subsite~site, scales = "fixed", labeller = label_both)
+
+```
+
+
