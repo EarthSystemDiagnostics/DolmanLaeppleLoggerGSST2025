@@ -6,7 +6,7 @@ editor_options:
   chunk_output_type: console
 ---
 
-This code section downloads the AIMS logger data using dataaimsr package. Data are only downloaded if the cached data are not present. To do this you will need to obtain an API Key. See here: https://github.com/ropensci/dataaimsr
+This code downloads the AIMS logger data using dataaimsr package. Data are only downloaded if the cached data are not present. To do this you will need to obtain an API Key. See here: https://github.com/ropensci/dataaimsr
 
 
 ```{r setup, eval=FALSE}
@@ -649,10 +649,7 @@ aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst <-
   mutate(lat = mean(lat, na.rm = TRUE),
          lon = mean(lon, na.rm = TRUE)) %>% 
   ungroup()
-```
 
-
-```{r save daily}
 saveRDS(aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst,
         "../data/processed-data/aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst.RDS")
 ```
@@ -689,77 +686,44 @@ aims_logger_data_inc_gaps_oisst_daily <- left_join(ungroup(aims_logger_data_inc_
 ```
 
 
-### Example logger deployment issues
+## Example logger deployment issues
 
-#### Kelso Reef
-
-Logger temperature - OISST value
+### Kelso Reef
 
 ```{r}
 aims_logger_data_inc_gaps_oisst_daily %>% 
-  filter(site == "Kelso Reef", 
-         #subsite == "KELSL1",
-         year >= 2000,
-         year <= 2010
-    ) %>%  
-  filter(complete.cases(qc_val)) %>% 
+  filter(site %in% c("Kelso Reef"),
+         year >= 2004, year <= 2010) %>% 
   group_by(site, subsite) %>% 
-  mutate(deployment_idx_subsite = as.character(as.numeric(factor(paste(time_coverage_start, deployment_id, depth,
+  mutate(depl_id = as.character(as.numeric(factor(paste(time_coverage_start, deployment_id, depth,
                                                                        serial_num))))) %>% 
-  arrange(subsite, time) %>% 
-  ggplot(aes(x = time, y = qc_val-sst, colour = deployment_idx_subsite,
-             #linetype = subsite,
-             group = factor(deployment_id))) +
-  geom_line() +
+  ggplot(aes(x = date, y = qc_val - sst, colour = factor(depl_id), group = subsite)) +
   geom_hline(yintercept = 0) +
- ggridges::scale_colour_cyclical(values = RColorBrewer::brewer.pal(5, name = "Set2")) +
-  facet_grid(subsite~site, scales = "fixed", labeller = label_both)
+  geom_line() +
+  ggridges::scale_colour_cyclical(values = c("#d8b365", "#5ab4ac")) +
+  facet_grid(subsite~site, labeller = label_both)+
+  theme_bw() +
+  labs(x = "Year", y = "Daily logger - OISST [°C]")
 ```
 
-Raw logger temperatures
+### Dip Reef 
 
 ```{r}
 aims_logger_data_inc_gaps_oisst_daily %>% 
-  filter(site == "Kelso Reef", 
-         year >= 2000,
-         year <= 2007
-    ) %>%  
-  filter(complete.cases(qc_val)) %>% 
-  #View() %>% 
+    filter(site == "Dip Reef", 
+           year <= 2010,
+         subsite %in% c("DIPSL1", "DIPFL1")
+    ) %>%
   group_by(site, subsite) %>% 
-  mutate(deployment_idx_subsite = as.character(as.numeric(factor(time_coverage_start)))) %>% 
-  arrange(subsite, time) %>% 
-  ggplot(aes(x = time, y = qc_val, colour = deployment_idx_subsite,
-             #linetype = subsite,
-             group = factor(deployment_id))) +
-  geom_line() +
- ggridges::scale_colour_cyclical(values = RColorBrewer::brewer.pal(5, name = "Set2")) +
-  facet_grid(depth+subsite~site, scales = "fixed", labeller = label_both)
-```
-
-
-
-```{r}
-aims_logger_data_inc_gaps_oisst_daily %>% 
-  filter(site == "Dip Reef", 
-         subsite %in% c("DIPSL1", "DIPFL1"),
-         #year >= 2004,
-         #year <= 2007
-    ) %>%  
-  filter(complete.cases(qc_val)) %>% 
-  left_join(., select(AIMS_logger_daily_OISST2, -lat, -lon)) %>%# View()
-  ungroup() %>% 
-  mutate(deployment_idx_subsite = as.character(as.numeric(factor(paste(subsite, deployment_id))))) %>% 
-  arrange(subsite, deployment_id, time) %>% 
-  ggplot(aes(x = time, y = qc_val-sst, 
-             name = deployment_id,
-             group = factor(deployment_id),
-             colour = deployment_idx_subsite)) +
-  geom_line() +
+  mutate(depl_id = as.character(as.numeric(factor(paste(time_coverage_start, deployment_id, depth,
+                                                                       serial_num))))) %>% 
+  ggplot(aes(x = date, y = qc_val - sst, colour = factor(depl_id), group = subsite)) +
   geom_hline(yintercept = 0) +
-  ggridges::scale_colour_cyclical(values = RColorBrewer::brewer.pal(5, name = "Set2")) +
-  facet_grid(subsite~site, scales = "fixed", labeller = label_both)
-
+  geom_line() +
+  ggridges::scale_colour_cyclical(values = c("#d8b365", "#5ab4ac")) +
+  facet_grid(subsite~site, labeller = label_both)+
+  theme_bw() +
+  labs(x = "Year", y = "Daily logger - OISST [°C]")
 ```
 
 
