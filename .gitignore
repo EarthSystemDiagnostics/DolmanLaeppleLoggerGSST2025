@@ -8,3 +8,7 @@
 
 */*_cache
 */*_files
+
+*data
+
+!/data/processed-data/aims_logger_data_inc_gaps_site_pick_gfill_daily_runs_oisst.RDS
