@@ -324,11 +324,20 @@ ratio_site_run_spec_mean <- ratio_site_run_spec %>%
   summarise_if(is.numeric, mean, na.rm = TRUE)
 ```
 
+
+```{r}
+## Save for later use
+saveRDS(ratio_site_run_spec, file = "../data/processed-data/logger_OISST_ratio_site_run_spec.RDS")
+```
+
+
 ```{r}
 depth_key <- logger_oisst_daily_10 %>% 
   group_by(site, site_run) %>% 
   summarise(depth = mean(depth, na.rm = TRUE))
 ```
+
+
 
 
 ```{r}
