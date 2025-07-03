@@ -432,7 +432,7 @@ aims_logger_data_gfill_siteruns_10 %>%
   #geom_point() +
   geom_point(aes(y = filled_vals), colour = "red") +
       scale_colour_viridis_c(na.value = "pink") +
-      facet_wrap(~site_run+signif(max_subsite_dist, 2), scales = "fixed")
+      facet_wrap(~site+signif(max_subsite_dist, 2), scales = "fixed")
 ```
 
 
@@ -509,7 +509,8 @@ all_year_mnths_site <- aims_logger_data_site_pick %>%
            )
     })
 
-aims_logger_data_inc_gaps_site_pick <- left_join(all_year_mnths_site, aims_logger_data_site_pick) %>% 
+aims_logger_data_inc_gaps_site_pick <- left_join(all_year_mnths_site,
+                                                 aims_logger_data_site_pick) %>% 
   mutate(date = as.Date(time)) 
 ```
 
@@ -672,6 +673,35 @@ saveRDS(aims_logger_data_inc_gaps_site_pick_gfill_daily_runs_oisst,
         "../data/processed-data/aims_logger_data_inc_gaps_site_pick_gfill_daily_runs_oisst.RDS")
 
 #beepr::beep()
+```
+
+### Compare variance of records using each method
+
+```{r}
+pick_vs_avg <- full_join(
+aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst %>% 
+  select(site, site_id, year, month, day, qc_val_filled) %>% 
+  rename(qc_val_filled_avg = qc_val_filled),
+
+aims_logger_data_inc_gaps_site_pick_gfill_daily_runs_oisst %>% 
+  select(site, site_id, year, month, day, qc_val_filled) %>% 
+  rename(qc_val_filled_pick = qc_val_filled)
+)
+
+pick_vs_avg_smry <- pick_vs_avg %>% 
+  group_by(site, site_id) %>% 
+  summarise(v_pick = var(qc_val_filled_pick),
+            v_avg = var(qc_val_filled_avg))
+
+
+pick_vs_avg_smry %>% 
+  ggplot(aes(y = v_pick / v_avg)) +
+  geom_boxplot() 
+
+pick_vs_avg_smry %>% 
+  ungroup() %>% 
+  summarise(vr_mean = mean(v_pick / v_avg),
+            vr_max = max(v_pick / v_avg))
 ```
 
 
