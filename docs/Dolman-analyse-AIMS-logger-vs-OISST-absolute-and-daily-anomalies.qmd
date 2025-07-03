@@ -1,13 +1,13 @@
 ---
 title: "Analyse AIMS logger data - absolute & daily anomalies combined"
 format:
-  html:
-    toc: true
-    code-fold: true
   pdf:
     toc: true
     code-fold: true
     default-image-extension: png
+  html:
+    toc: true
+    code-fold: true
 editor: source
 editor_options: 
   chunk_output_type: console
@@ -99,7 +99,50 @@ logger_oisst_daily_10 <- aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst %
          run = paste0("(", min(year), "-", max(year), ")")) %>% 
   rename(SST = sst,
          SST_product = interp_type) %>% 
-  mutate(year.dec = lubridate::decimal_date(date))
+  mutate(year.dec = lubridate::decimal_date(date)) %>% 
+  group_by(site) %>% 
+  mutate(site_run_year_list = paste(unique(run), collapse = "\n")) %>% 
+  ungroup() 
+```
+
+
+## Time series figure for supplement
+
+```{r}
+logger_oisst_daily_10 %>% 
+  ggplot(aes(x = time, y = qc_val_filled, colour = depth, group = site_run)) +
+  geom_line() +
+  geom_point(aes(y = qc_val_filled * ifelse(is.na(qc_val), 1, NA)), colour = "red") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(), legend.position = "bottom") +
+  scale_colour_viridis_c(na.value = "pink", direction = -1
+    ) +
+  labs(x = "Year", y = "Temperature [°C]", colour = "Logger depth [m]") +
+  facet_wrap(~site + site_run_year_list, ncol = 6)
+```
+
+## Meta data table
+
+```{r}
+meta_table <- logger_oisst_daily_10 %>% 
+  group_by(site, site_run, lon, lat) %>% 
+  summarise(start = min(date), end = max(date)) %>% 
+  mutate(`Duration (years)` = round(as.numeric((end - start) / 365), 1)) %>% 
+  ungroup() %>% 
+  select(site_run, lon, lat, start, end, `Duration (years)`) %>% 
+  rename(`Site run` = site_run,
+         Longitude = lon, Latitude = lat, 
+         `Start date` = start, 
+         `End date` = end) %>% 
+  distinct() 
+
+meta_table %>% 
+  knitr::kable(., digits = 2)
+
+meta_table %>% 
+  mutate(Longitude = round(Longitude, 2), 
+         Latitude = round(Latitude, 2)) %>% 
+  write.csv(., "logger_meta_table_supp.csv")
 ```
 
 ## Aggregate to annual means
@@ -127,9 +170,9 @@ RMSE_year <- logger_oisst_ann %>%
   summarise(
     n = n(),
     depth = mean(depth, na.rm = TRUE),
-    se = sd(SST-qc_val_filled) / sqrt(n),
+    se = sd(qc_val_filled-SST) / sqrt(n),
     bias = mean((qc_val_filled-SST)),
-    RMSE = sqrt(mean((SST-qc_val_filled)^2)),
+    RMSE = sqrt(mean((qc_val_filled-SST)^2)),
     rho = cor(SST, qc_val_filled)
     ) 
 
@@ -138,9 +181,9 @@ RMSE_mon <-  logger_oisst_daily_10 %>%
   summarise(
     n = n(),
     depth = mean(depth, na.rm = TRUE),
-    se = sd(SST-qc_val_filled, na.rm = TRUE) / sqrt(n),
+    se = sd(qc_val_filled-SST, na.rm = TRUE) / sqrt(n),
     bias = mean((qc_val_filled-SST)),
-    RMSE = sqrt(mean((SST-qc_val_filled)^2, na.rm = TRUE))
+    RMSE = sqrt(mean((qc_val_filled-SST)^2, na.rm = TRUE))
     )
 ```
 
@@ -181,6 +224,15 @@ logger_oisst_daily_10_anom <- logger_oisst_daily_10 %>%
          logger_daily = qc_val_filled)
 ```
 
+```{r}
+logger_oisst_daily_10_anom %>% 
+  group_by(site, site_run) %>% 
+  summarise(var_abs = var(SST_daily),
+            var_anom = var(SST_daily_anom)) %>% 
+  pivot_longer(cols = starts_with("var_")) %>% 
+  ggplot(aes(x = name, y = value)) +
+  geom_boxplot()
+```
 
 
 ## Spectra of matched logger OISSTv2 timeseries
@@ -205,14 +257,7 @@ AIMS_logger_spec_match <- logger_oisst_daily_10_anom %>%
   do({
     
     dat2 <- . 
-    
-    # sp_tmp <- PaleoSpec::SpecACF(dat2$temperature,
-    #                                 deltat = 1/365,
-    #                              k = 1, nw = 1,
-    #                              )  %>%
-    #   FilterSpecLog(., df.log = 0.01) %>%
-    #   Spec2DF()
-    
+   
     sp_tmp <- PaleoSpec::SpecMTM(dat2$temperature,
                                  deltat = 1/365, k = 3, nw = 2
                               ) %>%
@@ -225,19 +270,6 @@ AIMS_logger_spec_match <- logger_oisst_daily_10_anom %>%
   mutate(spec_id = paste(site, site_run, sensor_type, type)) %>% 
   as_spec_df()
 ```
-
-```{r}
-#identical(AIMS_logger_spec_match_2$spec , AIMS_logger_spec_match_1$spec)
-
-#table(AIMS_logger_spec_match_2$spec == AIMS_logger_spec_match_1$spec, useNA = #"always")
-```
-
-
-<!-- ```{r} -->
-<!-- gg_spec(AIMS_logger_spec_match, colour = temperature_type, -->
-<!--        group = paste(temperature_type, site_run)) + -->
-<!--   facet_wrap(~temperature_type) -->
-<!-- ``` -->
 
 
 ### Mean spec across locations
@@ -256,16 +288,11 @@ AIMS_logger_spec_match_reg <- AIMS_logger_spec_match %>%
     sp1 <- DF2Spec(dat)
     sp2 <- PaleoSpec::SpecInterpolate(sp1,
                                       freqout)
-    #sp3 <- FilterSpecLog(sp2)
     Spec2DF(sp2)
     
   }) %>% 
   mutate(spec_id = site_run) %>% 
   as_spec_df()
-
-# gg_spec(AIMS_logger_spec_match_reg, colour = sensor_type, type,
-#        group = paste(sensor_type, type, site_run)) +
-#   facet_wrap(~temperature_type)
 
 AIMS_logger_spec_match_reg_mean <- AIMS_logger_spec_match_reg %>% 
   group_by(temperature_type, sensor_type, type, freq) %>%
@@ -356,9 +383,14 @@ ratio_site_run_spec <- AIMS_logger_spec_match_reg %>%
   mutate(type = ifelse(grepl("anom", spec_id, fixed = TRUE),
                        "Daily anomalies", "Daily means")) %>% 
   group_by(type) %>% 
- #  mutate(lim.1 = qf(c(1 - pval / 2), dof, dof) * spec,
- #          lim.2 = qf(c(pval / 2), dof, dof) * spec 
- # ) %>% 
+    group_by(site, site_run, inc_2006_2008, product, spec_id, type) %>% 
+  do({
+    sp1 <- .
+    sp1$dof <- 2
+    sp2 <- FilterSpecLog(DF2Spec(sp1))
+    
+    Spec2DF(sp2)
+  }) %>% 
   as_spec_df() 
 
 
@@ -443,13 +475,18 @@ ratio_site_run_bw <- ratio_site_run_spec %>%
   mutate(spec_id = "Individual sites") %>%
   left_join(., depth_key) %>%
   #filter(freq > 12) %>%
-  mutate(f_band_name = cut(freq,
-                      breaks = c(0.09, 1, 12, 182),
-                      labels = c("Decadal to annual", "Annual to monthly",
+   mutate(f_band_name = cut(freq, 
+                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                                 182),
+                      labels = c("Decadal to inter-annual",
+                                 "Annual",
+                                 "Annual to monthly",
                                  "Monthly to inter-daily")),
-         f_band = cut(freq,
-                      breaks = c(0.09, 1, 12, 182))
-         ) %>%
+         f_band = cut(freq, 
+                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                                 #52,
+                                 182))
+         ) %>% 
    group_by(type, f_band, f_band_name, site_run, depth) %>%
   summarise_if(is.numeric, mean)
 ```
@@ -493,6 +530,32 @@ ratio_site_run_spec %>%
                                  "Monthly to inter-daily")),
          f_band = cut(freq, 
                       breaks = c(0.09, 12, 
+                                 #52,
+                                 182))
+         ) %>% 
+  group_by(type, f_band, f_band_name, site_run) %>% 
+  summarise(var_ratio = mean(spec, na.rm = TRUE)) %>% 
+  group_by(type, f_band, f_band_name) %>% 
+  summarise_q_2(., var = var_ratio, probs = c(0, 0.5, 1)) %>% 
+  knitr::kable(., digits = 2, format = "rst") 
+
+```
+
+
+```{r}
+ratio_site_run_spec %>% 
+  mutate(spec_id = "Individual sites") %>% 
+  left_join(., depth_key) %>% 
+  #filter(freq > 12) %>% 
+  mutate(f_band_name = cut(freq, 
+                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                                 182),
+                      labels = c("Decadal to inter-annual",
+                                 "Annual",
+                                 "Annual to monthly",
+                                 "Monthly to inter-daily")),
+         f_band = cut(freq, 
+                      breaks = c(0.09, 1/1.1, 1.1, 12, 
                                  #52,
                                  182))
          ) %>% 
