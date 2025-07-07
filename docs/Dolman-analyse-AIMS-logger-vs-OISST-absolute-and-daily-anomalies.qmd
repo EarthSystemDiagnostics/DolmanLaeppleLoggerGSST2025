@@ -1,13 +1,13 @@
 ---
 title: "Analyse AIMS logger data - absolute & daily anomalies combined"
 format:
+  html:
+    toc: true
+    code-fold: true  
   pdf:
     toc: true
     code-fold: true
     default-image-extension: png
-  html:
-    toc: true
-    code-fold: true
 editor: source
 editor_options: 
   chunk_output_type: console
@@ -259,7 +259,7 @@ AIMS_logger_spec_match <- logger_oisst_daily_10_anom %>%
     dat2 <- . 
    
     sp_tmp <- PaleoSpec::SpecMTM(dat2$temperature,
-                                 deltat = 1/365, k = 3, nw = 2
+                                 deltat = 1/365#, k = 9, nw = 5
                               ) %>%
     AddConfInterval() %>%
     FilterSpecLog(., df.log = 0.01) %>%
@@ -316,9 +316,8 @@ AIMS_logger_spec_match_reg_mean <- AIMS_logger_spec_match_reg %>%
 ```
 
 
-
 ```{r}
-S_logger_OISST_mean <- AIMS_logger_spec_match_reg_mean %>% 
+S_logger_OISST_mean_anom <- AIMS_logger_spec_match_reg_mean %>% 
   as_spec_df() %>% 
   gg_spec(., group = paste(spec_id),
         colour = sensor_type, linetype = type, force.lims = TRUE,
@@ -338,12 +337,52 @@ S_logger_OISST_mean <- AIMS_logger_spec_match_reg_mean %>%
     ) +
   facet_wrap(~type, scales = "free_y")
 
-S_logger_OISST_mean
+S_logger_OISST_mean_anom
 ```
 
 
 ```{r}
-S_logger_OISST_mean_anom <- AIMS_logger_spec_match_reg_mean %>% 
+ts_labs <- tibble(
+  #x = c(0.2, 1, 4, 40),
+  x = c(1/10, 1/2, 2, 12) * 1.05,
+  y = rep(1e-04, length(x)),
+  label = c("Decadal to\ninter-annual",
+            "Inter-annual to\nbiannual",
+            "Biannual to\nmonthly",
+            "Monthly to\ninter-daily")
+  )
+
+S_logger_OISST_mean <- AIMS_logger_spec_match_reg_mean %>% 
+   filter(type == "Daily means") %>% 
+  as_spec_df() %>% 
+  gg_spec(., group = paste(spec_id),
+        colour = sensor_type, force.lims = TRUE,
+        time_unit = "years") +
+  scale_colour_manual("", values = pal_logger_coral_sst,
+                      labels = lbl_logger_coral_sst,
+                      aesthetics = c("fill", "colour")) +
+  ggplot2::scale_x_continuous(
+      trans = "log10",
+      breaks = c(100, 10, 1, 0.1, 0.01),
+      labels = c(100, 10, 1, 0.1, 0.01),
+      sec.axis = ggplot2::sec_axis(~ 1 / ., name = "Timescale [years]",
+                                   breaks = c(10, 1, 0.1, 0.01),
+                                   labels = c(10, 1, 0.1, 0.01))
+    ) +
+  facet_wrap(~type, scales = "free_y") +
+  geom_vline(xintercept = c(1/10, 1/2, 2, 12, 182.5), lty = 3) +
+  theme(panel.grid.major = element_blank()) +
+  geom_text(data = ts_labs, aes(x=x, y=y, label = label),
+            hjust = "left",
+            inherit.aes = FALSE)
+
+S_logger_OISST_mean
+
+```
+
+
+```{r}
+S_logger_OISST_anom <- AIMS_logger_spec_match_reg_mean %>% 
   filter(type == "Daily anomalies") %>% 
   as_spec_df() %>% 
   gg_spec(., group = paste(spec_id),
@@ -352,18 +391,22 @@ S_logger_OISST_mean_anom <- AIMS_logger_spec_match_reg_mean %>%
   scale_colour_manual("", values = pal_logger_coral_sst,
                       labels = lbl_logger_coral_sst,
                       aesthetics = c("fill", "colour")) +
-  # scale_linetype_manual("", values = lty_logger_coral_sst, 
-  #                       labels = lbl_logger_coral_sst) +
-   ggplot2::scale_x_continuous(
+  ggplot2::scale_x_continuous(
       trans = "log10",
       breaks = c(100, 10, 1, 0.1, 0.01),
       labels = c(100, 10, 1, 0.1, 0.01),
       sec.axis = ggplot2::sec_axis(~ 1 / ., name = "Timescale [years]",
                                    breaks = c(10, 1, 0.1, 0.01),
                                    labels = c(10, 1, 0.1, 0.01))
-    ) 
+    ) +
+  geom_vline(xintercept = c(1/10, 1/2, 2, 12, 182.5), lty = 3) +
+  theme(panel.grid.major = element_blank()) +
+  geom_text(data = ts_labs, aes(x=x, y=y, label = label),
+            hjust = "left",
+            inherit.aes = FALSE) +
+  labs(y = "PSD daily anomalies")
 
-S_logger_OISST_mean_anom
+S_logger_OISST_anom
 ```
 
 
@@ -382,15 +425,15 @@ ratio_site_run_spec <- AIMS_logger_spec_match_reg %>%
   mutate(spec_id = product) %>% 
   mutate(type = ifelse(grepl("anom", spec_id, fixed = TRUE),
                        "Daily anomalies", "Daily means")) %>% 
-  group_by(type) %>% 
-    group_by(site, site_run, inc_2006_2008, product, spec_id, type) %>% 
+  group_by(type) %>%
+  group_by(site, site_run, inc_2006_2008, product, spec_id, type) %>%
   do({
     sp1 <- .
     sp1$dof <- 2
     sp2 <- FilterSpecLog(DF2Spec(sp1))
-    
+
     Spec2DF(sp2)
-  }) %>% 
+  }) %>%
   as_spec_df() 
 
 
@@ -476,14 +519,15 @@ ratio_site_run_bw <- ratio_site_run_spec %>%
   left_join(., depth_key) %>%
   #filter(freq > 12) %>%
    mutate(f_band_name = cut(freq, 
-                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                      breaks = c(0.09, 1/2, 1/1.1, 1.1, 12, 
                                  182),
                       labels = c("Decadal to inter-annual",
+                                 "Inter-annual to annual",
                                  "Annual",
                                  "Annual to monthly",
                                  "Monthly to inter-daily")),
          f_band = cut(freq, 
-                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                      breaks = c(0.09, 1/2, 1/1.1, 1.1, 12, 
                                  #52,
                                  182))
          ) %>% 
@@ -495,6 +539,7 @@ ratio_site_run_bw <- ratio_site_run_spec %>%
 ```{r fig.height=8, fig.width=6}
 # ratio_site_run_bw %>% 
 fig_depth_var_ratio <- ratio_site_run_bw %>% 
+  filter(type == "Daily anomalies") %>% 
   ggplot(aes(x = depth, y = spec)) +
   geom_point(alpha = 0.5) +
   geom_hline(yintercept = 1, lty = 2) +
@@ -505,7 +550,7 @@ fig_depth_var_ratio <- ratio_site_run_bw %>%
   theme(panel.grid = element_blank(), strip.background = element_blank()) +
   geom_smooth(method = "lm", colour = "black", fill = "darkgrey") +
   labs(x = "Logger depth [m]", y = "Logger / OISST variance ratio") +
-  facet_grid(f_band_name+f_band ~ type, labeller = labeller(.multi_line = FALSE), 
+  facet_grid(f_band_name+f_band ~ ., labeller = labeller(.multi_line = FALSE), 
              scales = "fixed") 
 
 fig_depth_var_ratio
@@ -537,8 +582,8 @@ ratio_site_run_spec %>%
   summarise(var_ratio = mean(spec, na.rm = TRUE)) %>% 
   group_by(type, f_band, f_band_name) %>% 
   summarise_q_2(., var = var_ratio, probs = c(0, 0.5, 1)) %>% 
-  knitr::kable(., digits = 2, format = "rst") 
-
+  knitr::kable(., digits = 2#, format = "rst"
+               ) 
 ```
 
 
@@ -548,23 +593,24 @@ ratio_site_run_spec %>%
   left_join(., depth_key) %>% 
   #filter(freq > 12) %>% 
   mutate(f_band_name = cut(freq, 
-                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                      breaks = c(0.09, 1/2, 2, 12, 
                                  182),
                       labels = c("Decadal to inter-annual",
-                                 "Annual",
-                                 "Annual to monthly",
+                                 "Inter-annual to biannual",
+                                 #"Annual",
+                                 "Biannual to monthly",
                                  "Monthly to inter-daily")),
          f_band = cut(freq, 
-                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                      breaks = c(0.09, 1/2, 2, 12, 
                                  #52,
                                  182))
          ) %>% 
   group_by(type, f_band, f_band_name, site_run) %>% 
   summarise(var_ratio = mean(spec, na.rm = TRUE)) %>% 
   group_by(type, f_band, f_band_name) %>% 
-  summarise_q_2(., var = var_ratio, probs = c(0, 0.5, 1)) %>% 
-  knitr::kable(., digits = 2, format = "rst") 
-
+  summarise_q_2(., var = var_ratio, probs = c(0, 0.025, 0.5, 0.975, 1)) %>% 
+  knitr::kable(., digits = 2#, format = "rst"
+               ) 
 ```
 
 
@@ -632,6 +678,47 @@ AIMS_logger_oisst_coh <- logger_oisst_daily_10_anom_long %>%
   as_spec_df()
 ```
 
+```{r}
+lag_cor <- logger_oisst_daily_10_anom_long %>% 
+  filter(year.dec < 2024.708) %>% 
+  group_by(type, SST_product, site, site_run) %>% 
+  mutate(n = sum(is.na(SST_daily + logger_daily)==FALSE),
+         start_year = min(year), 
+         end_year = max(year)) %>% 
+  #filter(n >= 9*12) %>% 
+  group_by(type, SST_product, site, site_run, start_year, end_year) %>% 
+  arrange(year.dec) %>% 
+  do({
+    dat <- .
+    
+    ccf1 <- ccf(dat$SST_daily, dat$logger_daily,  plot = FALSE)
+    
+    tibble(lag = ccf1$lag, 
+           rho = ccf1$acf)
+    
+  })
+```
+
+```{r}
+lag_cor %>% 
+  ggplot(aes(x = lag, y = rho, group = site_run)) +
+  geom_line() +
+  geom_vline(xintercept = 0, colour = "red") +
+  facet_wrap(~type, scales = "free_y")
+
+best_lags <- lag_cor %>% 
+  group_by(type, site_run) %>% 
+  summarise(best_lag = lag[which.max(rho)]) %>% 
+  arrange(desc(abs(best_lag)))
+
+
+best_lags %>% 
+  ggplot(aes(x = best_lag)) +
+  geom_histogram() +
+  facet_wrap(~type)
+
+```
+
 
 
 ```{r}
@@ -697,6 +784,32 @@ AIMS_logger_oisst_coh_smooth %>%
   group_by(type, inc_2006_2008) %>% 
   summarise_q_2(., coh) %>% 
   knitr::kable(., digits = 2)
+```
+
+
+```{r}
+AIMS_logger_oisst_coh_smooth %>% 
+  group_by(type, SST_product, site_run, inc_2006_2008) %>%  
+  filter(freq >= 1/10, freq <= 182) %>% 
+  mutate(f_band_name = cut(freq, 
+                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                                 182),
+                      labels = c("Decadal to inter-annual",
+                                 "Annual",
+                                 "Annual to monthly",
+                                 "Monthly to inter-daily")),
+         f_band = cut(freq, 
+                      breaks = c(0.09, 1/1.1, 1.1, 12, 
+                                 #52,
+                                 182))
+         ) %>% 
+  group_by(type, f_band, f_band_name, site_run, inc_2006_2008) %>% 
+  summarise(var_ratio = mean(spec, na.rm = TRUE)) %>% 
+  group_by(type, inc_2006_2008, f_band, f_band_name) %>% 
+  summarise_q_2(., var = var_ratio, probs = c(0, 0.025, 0.5, 0.975, 1)) %>% 
+  knitr::kable(., digits = 2#, format = "rst"
+               ) 
+
 ```
 
 
@@ -802,11 +915,12 @@ ggsave(combined_fig_2, file = "pub-figs/combined_fig_2.png", width = 6, height =
 ref_line_col <- "#e41a1c"
 
 combined_fig_2_anom <- patchwork::wrap_plots(
-  S_logger_OISST_mean_anom +
+  S_logger_OISST_anom +
     theme(
       axis.title.x.bottom = element_blank(),
       panel.grid = element_blank()
     ) +
+    labs(y = "PSD daily anomaly") +
     #geom_vline(xintercept = c(1, 2, 3, 4), lty = 3) +
     geom_vline(xintercept = 12, lty = 2, colour = ref_line_col),
   Ratio_logger_OISST_site_run_anom +
