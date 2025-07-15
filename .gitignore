@@ -5,6 +5,7 @@
 
 *.html
 *.png
+*.pdf
 
 */*_cache
 */*_files
