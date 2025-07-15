@@ -1,13 +1,13 @@
 ---
 title: "Analyse AIMS logger data - absolute & daily anomalies combined"
 format:
-  html:
-    toc: true
-    code-fold: true  
   pdf:
     toc: true
     code-fold: true
     default-image-extension: png
+  html:
+    toc: true
+    code-fold: true  
 editor: source
 editor_options: 
   chunk_output_type: console
@@ -62,11 +62,13 @@ lty_logger_coral_sst <- c(
 )
 ```
 
+
+## Frequency bands and axes
+
 ```{r labels}
 tscl_brks <- c(0.1, 1/2, 2, 12, 182.5)
 
 tscl_labs <- tibble(
-  #x = c(0.2, 1, 4, 40),
   x = c(1/10, 1/2, 2, 12) * 1.05,
   y = rep(1e-04, length(x)),
   label = c("Decadal to inter-annual",
@@ -112,7 +114,7 @@ summarise_q_2 <- function (dat, var, probs =
 ```
 
 
-## Load data
+# Load data
 
 ```{r load-data}
 aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst <-
@@ -120,7 +122,7 @@ aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst <-
 ```
 
 
-## Filter and restructure data
+## Create labels for site_runs and rename some variables
 
 ```{r}
 logger_oisst_daily_10 <- aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst %>% 
@@ -135,11 +137,24 @@ logger_oisst_daily_10 <- aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst %
   ungroup() 
 ```
 
-
-## Time series figure for supplement
+## Calculate daily anomalies for later analysis
 
 ```{r}
-logger_oisst_daily_10 %>% 
+logger_oisst_daily_10_anom <- logger_oisst_daily_10 %>% 
+  group_by(site, site_id, month, day) %>% 
+  mutate(logger_daily_anom = qc_val_filled - mean(qc_val_filled),
+         logger_daily_anom_n = sum(is.na(qc_val_filled) == FALSE),
+         SST_daily_anom = SST - mean(SST),
+         SST_daily_anom_n = sum(is.na(SST) == FALSE)) %>% 
+  rename(SST_daily = SST, 
+         logger_daily = qc_val_filled)
+```
+
+
+## Timeseries figure of processed logger data for supplement
+
+```{r fig.height=12, fig.width=9}
+fig_timeseries_logger <- logger_oisst_daily_10 %>% 
   ggplot(aes(x = time, y = qc_val_filled, colour = depth, group = site_run)) +
   geom_line() +
   geom_point(aes(y = qc_val_filled * ifelse(is.na(qc_val), 1, NA)), colour = "red") +
@@ -149,9 +164,12 @@ logger_oisst_daily_10 %>%
     ) +
   labs(x = "Year", y = "Temperature [°C]", colour = "Logger depth [m]") +
   facet_wrap(~site + site_run_year_list, ncol = 6)
+
+fig_timeseries_logger
 ```
 
-## Meta data table
+
+## Meta data table S1
 
 ```{r}
 meta_table <- logger_oisst_daily_10 %>% 
@@ -169,13 +187,14 @@ meta_table <- logger_oisst_daily_10 %>%
 meta_table %>% 
   knitr::kable(., digits = 2)
 
-meta_table %>% 
-  mutate(Longitude = round(Longitude, 2), 
-         Latitude = round(Latitude, 2)) %>% 
-  write.csv(., "logger_meta_table_supp.csv")
+# meta_table %>% 
+#   mutate(Longitude = round(Longitude, 2), 
+#          Latitude = round(Latitude, 2)) %>% 
+#   write.csv(., "logger_meta_table_supp.csv")
 ```
 
-## Aggregate to annual means
+
+## Aggregate data to annual means
 
 ```{r}
 logger_oisst_ann <- logger_oisst_daily_10 %>%
@@ -188,7 +207,6 @@ logger_oisst_ann <- logger_oisst_daily_10 %>%
          sst_anom = SST - mean(SST),
          n_years = diff(range(year.dec)))
 ```
-
 
 
 ## RMSE and Bias over time
@@ -217,7 +235,7 @@ RMSE_mon <-  logger_oisst_daily_10 %>%
     )
 ```
 
-
+## Figure 2 
 ```{r}
 fig_bias_year <- RMSE_year %>% 
   filter(n > 5) %>% 
@@ -236,37 +254,13 @@ fig_bias_year <- RMSE_year %>%
 
 fig_bias_year  
 
-ggsave(fig_bias_year, file = "pub-figs/fig_bias_year.png", width = 6, height = 4, dpi = 300)
-
+#ggsave(fig_bias_year, file = "pub-figs/fig_bias_year.png", width = 6, height = 4, dpi = 300)
 ```
 
 
-## Calculate daily anomalies
-
-```{r}
-logger_oisst_daily_10_anom <- logger_oisst_daily_10 %>% 
-  group_by(site, site_id, month, day) %>% 
-  mutate(logger_daily_anom = qc_val_filled - mean(qc_val_filled),
-         logger_daily_anom_n = sum(is.na(qc_val_filled) == FALSE),
-         SST_daily_anom = SST - mean(SST),
-         SST_daily_anom_n = sum(is.na(SST) == FALSE)) %>% 
-  rename(SST_daily = SST, 
-         logger_daily = qc_val_filled)
-```
-
-```{r}
-logger_oisst_daily_10_anom %>% 
-  group_by(site, site_run) %>% 
-  summarise(var_abs = var(SST_daily),
-            var_anom = var(SST_daily_anom)) %>% 
-  pivot_longer(cols = starts_with("var_")) %>% 
-  ggplot(aes(x = name, y = value)) +
-  geom_boxplot()
-```
-
+# Spectral analysis
 
 ## Spectra of matched logger OISSTv2 timeseries
-
 
 ```{r}
 AIMS_logger_spec_match <- logger_oisst_daily_10_anom %>% 
@@ -302,7 +296,7 @@ AIMS_logger_spec_match <- logger_oisst_daily_10_anom %>%
 ```
 
 
-### Mean spec across locations
+## Calculate mean spec across locations
 
 ```{r}
 AIMS_logger_spec_match_reg <- AIMS_logger_spec_match %>% 
@@ -346,6 +340,8 @@ AIMS_logger_spec_match_reg_mean <- AIMS_logger_spec_match_reg %>%
 ```
 
 
+### Mean PSD of daily mean and anomalies 
+
 ```{r}
 S_logger_OISST_mean_anom <- AIMS_logger_spec_match_reg_mean %>% 
   as_spec_df() %>% 
@@ -384,7 +380,6 @@ S_logger_OISST_mean <- AIMS_logger_spec_match_reg_mean %>%
   labs(y = "PSD daily means")
 
 S_logger_OISST_mean
-
 ```
 
 
@@ -411,7 +406,7 @@ S_logger_OISST_anom
 ```
 
 
-#### Spec ratio per site_run
+## PSD ratio per site_run
 
 ```{r}
 pval <- 0.05
@@ -456,6 +451,9 @@ depth_key <- logger_oisst_daily_10_anom %>%
   summarise(depth = mean(depth, na.rm = TRUE))
 ```
 
+### PSD ratio figures
+
+#### Daily means
 
 ```{r}
 Ratio_logger_OISST_site_run_mean <- ratio_site_run_spec %>% 
@@ -481,6 +479,7 @@ Ratio_logger_OISST_site_run_mean <- ratio_site_run_spec %>%
 Ratio_logger_OISST_site_run_mean
 ```
 
+#### Anomalies
 
 ```{r}
 Ratio_logger_OISST_site_run_anom <- ratio_site_run_spec %>% 
@@ -507,6 +506,8 @@ Ratio_logger_OISST_site_run_anom
 ```
 
 
+#### PSD ratio as function of logger depth
+
 ```{r}
 ratio_site_run_bw <- ratio_site_run_spec %>%
   mutate(spec_id = "Individual sites") %>%
@@ -524,35 +525,12 @@ ratio_site_run_bw <- ratio_site_run_spec %>%
          ) %>% 
    group_by(type, f_band, f_band_name, site_run, depth) %>%
   summarise_if(is.numeric, mean)
+
+  
 ```
 
 
-```{r fig.height=7, fig.width=4}
-# ratio_site_run_bw %>% 
-fig_depth_var_ratio <- ratio_site_run_bw %>% 
-  filter(type == "Daily anomalies") %>% 
-  ggplot(aes(x = depth, y = spec)) +
-  geom_point(alpha = 0.5) +
-  geom_hline(yintercept = 1, lty = 2) +
-  scale_x_log10() +
-  scale_y_log10() +
-  annotation_logticks() +
-  theme_bw() +
-  theme(panel.grid = element_blank(), strip.background = element_blank()) +
-  geom_smooth(method = "lm", colour = "black", fill = "darkgrey") +
-  labs(x = "Logger depth [m]", y = "PSD logger / PSD OISST") +
-  facet_grid(f_band_name+paste0("Freq. band ", f_band) ~ .,
-             labeller = labeller(.multi_line = TRUE), 
-             scales = "fixed") 
-
-fig_depth_var_ratio
-
-ggsave(fig_depth_var_ratio, file = "pub-figs/fig_depth_var_ratio.png", width = 3.5, height = 6, dpi = 300)
-
-```
-
-
-```{r fig.height=7, fig.width=4}
+```{r fig.height=4, fig.width=5}
 fig_depth_var_ratio_col <- ratio_site_run_bw %>% 
   filter(type == "Daily anomalies") %>% 
   ungroup() %>% 
@@ -586,33 +564,7 @@ fig_depth_var_ratio_col
 ```
 
 
-```{r fig.height=5, fig.width=5}
-# ratio_site_run_bw %>% 
-fig_depth_var_ratio_sq <- ratio_site_run_bw %>% 
-  filter(type == "Daily anomalies") %>% 
-  ggplot(aes(x = depth, y = spec)) +
-  geom_point(alpha = 0.5) +
-  geom_hline(yintercept = 1, lty = 2) +
-  scale_x_log10() +
-  scale_y_log10() +
-  annotation_logticks() +
-  theme_bw() +
-  theme(panel.grid = element_blank(), strip.background = element_blank()) +
-  geom_smooth(method = "lm", colour = "black", fill = "darkgrey") +
-  labs(x = "Logger depth [m]", y = "PSD logger / PSD OISST") +
-  #facet_grid(f_band_name+paste0("Freq. band ", f_band) ~ .,
-   #          labeller = labeller(.multi_line = TRUE), 
-  #          scales = "fixed") 
-  facet_wrap(~f_band_name+paste0("Freq. band ", f_band),
-             labeller = labeller(.multi_line = TRUE), 
-             scales = "fixed") 
-
-fig_depth_var_ratio_sq
-```
-
-
 ### Variance ratio table
-
 
 ```{r}
 ratio_site_run_bw %>% 
@@ -622,10 +574,8 @@ ratio_site_run_bw %>%
   summarise(var_ratio = mean(spec, na.rm = TRUE)) %>% 
   group_by(type, f_band, f_band_name) %>% 
   summarise_q_2(., var = var_ratio, probs = c(0, 0.025, 0.5, 0.975, 1)) %>% 
-  knitr::kable(., digits = 2#, format = "rst"
-               ) 
+  knitr::kable(., digits = 2) 
 ```
-
 
 
 ## Coherence
@@ -647,12 +597,14 @@ coherence <- function(x1, x2, spans) {
 
 
 ```{r}
+# restructure data for daily means
 tmpa <- logger_oisst_daily_10_anom %>% 
   pivot_longer(cols = c(SST_daily, SST_daily_anom), names_to = "type",
                values_to = "SST_daily") %>%
   mutate(type = ifelse(grepl("_anom", type, fixed = TRUE), "Daily anomalies", "Daily means")) %>% 
   select(-starts_with("logger_"))
 
+# restructure data for daily anomalies
 tmpb <- logger_oisst_daily_10_anom %>% 
   pivot_longer(cols = c(logger_daily, logger_daily_anom), names_to = "type",
                values_to = "logger_daily") %>%
@@ -668,7 +620,6 @@ AIMS_logger_oisst_coh <- logger_oisst_daily_10_anom_long %>%
   mutate(n = sum(is.na(SST_daily + logger_daily)==FALSE),
          start_year = min(year), 
          end_year = max(year)) %>% 
-  #filter(n >= 9*12) %>% 
   group_by(type, SST_product, site, site_run, start_year, end_year) %>% 
   arrange(year.dec) %>% 
   do({
@@ -691,48 +642,6 @@ AIMS_logger_oisst_coh <- logger_oisst_daily_10_anom_long %>%
   as_spec_df()
 ```
 
-```{r}
-lag_cor <- logger_oisst_daily_10_anom_long %>% 
-  filter(year.dec < 2024.708) %>% 
-  group_by(type, SST_product, site, site_run) %>% 
-  mutate(n = sum(is.na(SST_daily + logger_daily)==FALSE),
-         start_year = min(year), 
-         end_year = max(year)) %>% 
-  #filter(n >= 9*12) %>% 
-  group_by(type, SST_product, site, site_run, start_year, end_year) %>% 
-  arrange(year.dec) %>% 
-  do({
-    dat <- .
-    
-    ccf1 <- ccf(dat$SST_daily, dat$logger_daily,  plot = FALSE)
-    
-    tibble(lag = ccf1$lag, 
-           rho = ccf1$acf)
-    
-  })
-```
-
-```{r}
-lag_cor %>% 
-  ggplot(aes(x = lag, y = rho, group = site_run)) +
-  geom_line() +
-  geom_vline(xintercept = 0, colour = "red") +
-  facet_wrap(~type, scales = "free_y")
-
-best_lags <- lag_cor %>% 
-  group_by(type, site_run) %>% 
-  summarise(best_lag = lag[which.max(rho)]) %>% 
-  arrange(desc(abs(best_lag)))
-
-
-best_lags %>% 
-  ggplot(aes(x = best_lag)) +
-  geom_histogram() +
-  facet_wrap(~type)
-
-```
-
-
 
 ```{r}
 AIMS_logger_oisst_coh_smooth <- AIMS_logger_oisst_coh %>% 
@@ -749,7 +658,7 @@ AIMS_logger_oisst_coh_smooth <- AIMS_logger_oisst_coh %>%
   as_spec_df()
 ```
 
-## put coh on same freq axes
+### Put coherence on same freq axes
 
 ```{r}
 AIMS_logger_oisst_coh_reg <- AIMS_logger_oisst_coh_smooth %>% 
@@ -789,16 +698,7 @@ AIMS_logger_oisst_coh_reg_mean <- AIMS_logger_oisst_coh_reg %>%
   as_spec_df()
 ```
 
-```{r}
-AIMS_logger_oisst_coh_smooth %>% 
-  group_by(type, SST_product, site_run, inc_2006_2008) %>% 
-  filter(freq >= 1/10, freq <= 1/5) %>% 
-  summarise(coh = mean(coh)) %>% 
-  group_by(type, inc_2006_2008) %>% 
-  summarise_q_2(., coh) %>% 
-  knitr::kable(., digits = 2)
-```
-
+### Summarise coherence for different timescales
 
 ```{r}
 AIMS_logger_oisst_coh_smooth %>% 
@@ -824,6 +724,10 @@ AIMS_logger_oisst_coh_smooth %>%
 ```
 
 
+### Coherence figures
+
+#### Daily means
+
 ```{r, fig.width=9}
 fig_coh_smooth_mean <- AIMS_logger_oisst_coh_smooth %>% 
   filter(type == "Daily means") %>% 
@@ -847,6 +751,7 @@ fig_coh_smooth_mean <- AIMS_logger_oisst_coh_smooth %>%
 fig_coh_smooth_mean
 ```
 
+#### Daily anomalies
 
 ```{r, fig.width=9}
 fig_coh_smooth_anom <- AIMS_logger_oisst_coh_smooth %>% 
@@ -872,32 +777,10 @@ fig_coh_smooth_anom
 ```
 
 
-```{r, fig.width=9}
-fig_coh_smooth_anom <- AIMS_logger_oisst_coh_smooth %>% 
-  filter(type == "Daily anomalies", 
-         inc_2006_2008 == FALSE) %>% 
-  left_join(., depth_key) %>% 
-  as_spec_df() %>% 
-  ggplot(aes(x = freq, y = spec, group = site_run,
-             colour = depth, alpha.line = 0.75)) +
-  geom_line() +
-  scale_y_continuous() +
-  annotation_logticks(sides="bt") +
-  theme_bw() +
-  theme(panel.grid = element_blank()) +
-  coord_cartesian(xlim = c(1/10, 365/2)) +
-  scale_colour_viridis_c(direction = -1) +
-  labs(colour = "Depth [m]", x = "Frequency [1/years]",
-       y = "Squared coherency") +
-  geom_vline(xintercept = c(1/10, 1/2, 2, #12,
-                            182.5), lty = 3) +
- freq_axis
 
-fig_coh_smooth_anom
-```
+#### Coherence as a function of logger depth
 
-
-```{r, fig.width=9}
+```{r, fig.width=5, fig.height=4}
 fig_coh_depth <- AIMS_logger_oisst_coh_smooth %>% 
   filter(type == "Daily anomalies",
          inc_2006_2008 == FALSE) %>% 
@@ -943,58 +826,9 @@ fig_coh_depth <- AIMS_logger_oisst_coh_smooth %>%
 fig_coh_depth
 ```
 
-```{r fig.width=7, fig.height=7}
-patchwork::wrap_plots(fig_depth_var_ratio_col + 
-                        theme(axis.title.x = element_blank()) ,
-                      fig_coh_depth +
-                        theme(legend.position = "none"),
-                      ncol = 1) +
-  patchwork::plot_annotation(tag_levels = "A")
-```
+# Composite figures
 
-
-<!-- ```{r} -->
-<!-- patchwork::wrap_plots(fig_depth_var_ratio_col + -->
-<!--                         theme(legend.position = "none") , -->
-<!--                       fig_coh_depth , -->
-<!--                       ncol = 2) -->
-<!-- ``` -->
-
-## Fig S3 daily means
-
-```{r, fig.height=0.8*12, fig.width=0.8*9}
-ref_line_col <- "#e41a1c"
-
-combined_fig_3_mean <- patchwork::wrap_plots(
-  S_logger_OISST_mean +
-    theme(
-      axis.title.x.bottom = element_blank(),
-      panel.grid = element_blank()
-    ) +
-    geom_vline(xintercept = 12, lty = 2, colour = ref_line_col),
-  Ratio_logger_OISST_site_run_mean +
-    theme(
-      axis.title.x = element_blank(),
-      panel.grid = element_blank()
-    ) +
-    geom_hline(yintercept = c(1), lty = 2, colour = ref_line_col) +
-    geom_vline(xintercept = c(12), lty = 2, colour = ref_line_col),
-  fig_coh_smooth_mean +
-    theme(
-      axis.title.x.top = element_blank(),
-      panel.grid = element_blank()
-    ) +
-    geom_vline(xintercept = 12, lty = 2, colour = ref_line_col) +
-    geom_hline(yintercept = 0.5, lty = 2, colour = ref_line_col),
-  ncol = 1
-) +
-  patchwork::plot_annotation(tag_levels = "A")
-
-combined_fig_3_mean
-```
-
-
-## Fig 3 daily anomalies
+## Fig 3 - PSD, PSD ratio, and coherence for daily anomalies
 
 ```{r, fig.height=0.8*12, fig.width=0.8*9}
 ref_line_col <- "#e41a1c"
@@ -1029,4 +863,52 @@ combined_fig_3_anom <- patchwork::wrap_plots(
 
 combined_fig_3_anom
 ```
+
+
+## Figure 4 - PSD ratio and coherence as a function of logger depth
+
+```{r fig.width=7, fig.height=7}
+patchwork::wrap_plots(fig_depth_var_ratio_col + 
+                        theme(axis.title.x = element_blank()) ,
+                      fig_coh_depth +
+                        theme(legend.position = "none"),
+                      ncol = 1) +
+  patchwork::plot_annotation(tag_levels = "A")
+```
+
+
+## Fig X - PSD, PSD ratio, and coherence for daily means
+
+```{r, fig.height=0.8*12, fig.width=0.8*9}
+ref_line_col <- "#e41a1c"
+
+combined_fig_3_mean <- patchwork::wrap_plots(
+  S_logger_OISST_mean +
+    theme(
+      axis.title.x.bottom = element_blank(),
+      panel.grid = element_blank()
+    ) +
+    geom_vline(xintercept = 12, lty = 2, colour = ref_line_col),
+  Ratio_logger_OISST_site_run_mean +
+    theme(
+      axis.title.x = element_blank(),
+      panel.grid = element_blank()
+    ) +
+    geom_hline(yintercept = c(1), lty = 2, colour = ref_line_col) +
+    geom_vline(xintercept = c(12), lty = 2, colour = ref_line_col),
+  fig_coh_smooth_mean +
+    theme(
+      axis.title.x.top = element_blank(),
+      panel.grid = element_blank()
+    ) +
+    geom_vline(xintercept = 12, lty = 2, colour = ref_line_col) +
+    geom_hline(yintercept = 0.5, lty = 2, colour = ref_line_col),
+  ncol = 1
+) +
+  patchwork::plot_annotation(tag_levels = "A")
+
+combined_fig_3_mean
+```
+
+
 
