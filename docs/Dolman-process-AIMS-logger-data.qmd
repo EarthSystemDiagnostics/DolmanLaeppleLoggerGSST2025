@@ -21,6 +21,13 @@ usethis::edit_r_environ()
 
 ## Required packages
 
+Install non-cran package
+
+```{r, eval=FALSE}
+# install.packages("remotes")
+remotes::install_github("EarthSystemDiagnostics/paleospec")
+```
+
 ```{r}
 library(dplyr)
 library(tidyr)
@@ -597,6 +604,13 @@ extract_data_with_cdo_dis <- function(
 
 This code is time consuming and only runs if the cached processed file is not found. 
 
+file "sst.day.mean.trop.1981.2025.nc" is a netcdf file created for convenience 
+by combining the separate netcdf files of OISSTv2.1 data for each year downloaded 
+from: https://www.psl.noaa.gov/data/gridded/data.noaa.oisst.v2.highres.html
+
+It is provided in the Zenodo archive for this code: https://doi.org/10.5281/zenodo.15096110
+
+
 ```{r}
 if (file.exists("../data/processed-data/AIMS_logger_daily_OISST2.RDS") == FALSE){
 
@@ -756,4 +770,78 @@ aims_logger_data_inc_gaps_oisst_daily %>%
   labs(x = "Year", y = "Daily logger - OISST [°C]")
 ```
 
+
+# Interpolation sensitivity analysis
+
+Test the sensitivity of the spectral analysis to the infilling of missing logger
+data values by linear interpolation.
+
+The approach is:
+
+1. to use the matched OISST data
+2. insert gaps in the OISST data in the places where there were gaps in the logger
+data 
+3. fill in the artificial gaps by linear interpolation, using the same method 
+used for the logger data
+4. estimate PSD of the original OISST data and the gap filled
+5. compare the PSD ratios
+
+
+```{r}
+interp_test_dat_1 <- aims_logger_data_inc_gaps_site_gfill_daily_runs_oisst 
+
+## add gaps to OISST where there were gaps in logger data
+interp_test_dat_2 <- interp_test_dat_1 %>%
+  mutate(
+    SST_gappy = ifelse(is.na(qc_val), NA, sst)
+  ) %>%
+  ## interpolate across gaps
+  group_by(site, site_run) %>%
+  arrange(site, site_run, time) %>%
+  mutate(SST_gap_filled = zoo::na.approx(
+    SST_gappy, x = time, xout = time, maxgap = 7)
+  )
+```
+
+Plot SST with gaps indicated
+
+```{r}
+interp_test_dat_2 %>%
+  ggplot(aes(x = time, y = SST_gap_filled, group = site_run)) +
+  geom_line() +
+  geom_point(data = filter(dat2, is.na(SST_gappy)), colour = "red") +
+  facet_wrap(~site)
+```
+
+Estimate spectra for original and gap filled
+
+```{r}
+interp_test_dat_2_long <- interp_test_dat_2 %>%
+  select(site, site_run, time, SST, SST_gap_filled) %>%
+  pivot_longer(starts_with("SST"), values_to = "SST")
+
+specs2 <- interp_test_dat_2_long %>%
+  group_by(site_run, name) %>%
+  do({
+    sp1 <- FilterSpecLog(SpecMTM(.$SST, deltat = 1/365))
+    Spec2DF(sp1)
+  }) %>%
+  mutate(spec_id = name) %>%
+  as_spec_df()
+```
+
+```{r}
+specs2 %>%
+  as_tibble() %>%
+  select(site_run, name, spec, freq) %>%
+  pivot_wider(names_from = name, values_from = spec) %>%
+  ggplot(aes(x = freq, y = SST_gap_filled / SST, group = site_run)) +
+  geom_line(alpha = 0.5) +
+  geom_hline(yintercept = 1, lty = 2, colour = "red") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "Frequency [1/year]",
+       y = "PSD gap filled / complete OISST [ratio]") +
+  theme_bw()
+```
 
