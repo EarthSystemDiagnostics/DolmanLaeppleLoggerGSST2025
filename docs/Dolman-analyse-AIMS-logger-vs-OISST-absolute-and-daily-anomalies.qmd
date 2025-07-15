@@ -1,13 +1,13 @@
 ---
 title: "Analyse AIMS logger data - absolute & daily anomalies combined"
 format:
+  html:
+    toc: true
+    code-fold: true 
   pdf:
     toc: true
     code-fold: true
-    default-image-extension: png
-  html:
-    toc: true
-    code-fold: true  
+    default-image-extension: pdf
 editor: source
 editor_options: 
   chunk_output_type: console
@@ -236,7 +236,7 @@ RMSE_mon <-  logger_oisst_daily_10 %>%
 ```
 
 ## Figure 2 
-```{r}
+```{r Fig2, fig.width = 6, fig.height = 4}
 fig_bias_year <- RMSE_year %>% 
   filter(n > 5) %>% 
   ggplot(aes(x = year, y = bias)) +
@@ -830,7 +830,7 @@ fig_coh_depth
 
 ## Fig 3 - PSD, PSD ratio, and coherence for daily anomalies
 
-```{r, fig.height=0.8*12, fig.width=0.8*9}
+```{r Fig3, fig.height=0.8*12, fig.width=0.8*9}
 ref_line_col <- "#e41a1c"
 
 combined_fig_3_anom <- patchwork::wrap_plots(
@@ -859,7 +859,7 @@ combined_fig_3_anom <- patchwork::wrap_plots(
     geom_hline(yintercept = 0.5, lty = 2, colour = ref_line_col),
   ncol = 1
 ) +
-  patchwork::plot_annotation(tag_levels = "A")
+  patchwork::plot_annotation(tag_levels = "a")
 
 combined_fig_3_anom
 ```
@@ -867,13 +867,13 @@ combined_fig_3_anom
 
 ## Figure 4 - PSD ratio and coherence as a function of logger depth
 
-```{r fig.width=7, fig.height=7}
+```{r Fig4, fig.width=7, fig.height=7}
 patchwork::wrap_plots(fig_depth_var_ratio_col + 
                         theme(axis.title.x = element_blank()) ,
                       fig_coh_depth +
                         theme(legend.position = "none"),
                       ncol = 1) +
-  patchwork::plot_annotation(tag_levels = "A")
+  patchwork::plot_annotation(tag_levels = "a")
 ```
 
 
@@ -905,7 +905,7 @@ combined_fig_3_mean <- patchwork::wrap_plots(
     geom_hline(yintercept = 0.5, lty = 2, colour = ref_line_col),
   ncol = 1
 ) +
-  patchwork::plot_annotation(tag_levels = "A")
+  patchwork::plot_annotation(tag_levels = "a")
 
 combined_fig_3_mean
 ```
